@@ -64,6 +64,8 @@ Replay only works if a turn produces the *exact same* sequence of events every t
 
 ## 3. Data model sketch (starting point, expect to evolve)
 
+> **v0 note:** the transform system in §3.1–§3.3 below supersedes the agent-centric sketch for M0–M2. A person is a resource token, not an `Agent` object; individual agent records return when the political layer needs them (M4) and slot into the same transform engine.
+
 ```python
 # --- The world ---
 WorldState:
@@ -108,6 +110,63 @@ ecosystem_metrics(world)  -> per-substance production/consumption/net-drift
 political_state(world)    -> movement strengths, factional balance (from agent dispositions)
 ```
 These read agent state; they never own state.
+
+### 3.1 Scenario configuration format (v0)
+
+One JSON file per scenario, four sections. Authoring uses human-friendly count-dicts; the loader compiles everything to integer vectors (§3.2).
+
+```json
+{
+  "resources": ["person", "food", "plant", "energy", "air"],
+  "transforms": [
+    { "name": "survival",
+      "inputs":  { "person": 1, "food": 1, "air": 1 },
+      "outputs": { "person": 1 } }
+  ],
+  "locations": [
+    { "id": "greenhouse",
+      "resources": { "plant": 8, "energy": 4 },
+      "destinations": ["habitat"] }
+  ],
+  "evaluation_order": ["habitat", "greenhouse"]
+}
+```
+
+- **`resources`** — the global vocabulary. Its order defines the resource enumeration used everywhere else at runtime.
+- **`transforms`** — ordered list; **position is priority**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last); ties broken by authored order. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
+- **`locations`** — nodes of a DAG. `destinations` are location ids (edges point downstream). Initial stocks live here.
+- **`evaluation_order`** — explicit total order over location ids for turn processing. Explicit rather than derived so scenario authors control contention priority.
+
+The reference example is `scenarios_data/simple-world.json`.
+
+### 3.2 Runtime representation
+
+Compile the config once at load; the tick loop is pure integer array arithmetic (which also kills a whole class of float-determinism problems):
+
+- **Resource enum:** `resources` list → index `0..R-1`.
+- **World stock:** an `L × R` integer matrix `stock[l][r]`. This *is* the mutable world state (plus tick counter and RNG seed).
+- **Transforms:** two `T × R` integer matrices, `need` and `emit`.
+- **Availability pool** for location `l`: `avail = stock[l] + Σ stock[u]` over upstream locations `u` (those listing `l` as a destination). Never materialized as a merged collection — it's a vector sum.
+- **Firing count:** transform `t` fires `n = min over resources of floor(avail[r] / need[t][r])` times at `l` — the number of *simultaneous* firings the pool supports (0 if any need exceeds supply).
+- **Firing:** subtract `n * need[t]` from `current` (this turn's depleting stock; see §3.3 for which rows), add `n * emit[t]` to `next_stock[l]`.
+- **Aggregation:** ship-wide totals are column sums of `stock`; per-location and per-region metrics are row slices. The M1 ecosystem metrics fall out of this for free.
+
+Dense vectors assume a modest global vocabulary (dozens to low hundreds of resources) — revisit only if that assumption breaks.
+
+### 3.3 Turn evaluation semantics — universal decay (provisional, validate in M0)
+
+The turn is a **double-buffer with universal decay**: inputs come from this turn's
+stock, outputs go to a fresh next-turn stock, and *anything not re-emitted is
+gone*. Next-turn contents are exactly what the transforms produced.
+
+1. Start `next_stock` at all zeros. Keep a working copy `current` of this turn's stock, which depletes as transforms consume it.
+2. Locations are processed in `evaluation_order`; within a location, transforms in priority order — one single pass per turn.
+3. **Batch firing.** When transform `t` comes up, compute `n` (§3.2) against the current pool, then consume `n * need` from `current` and add `n * emit` to `next_stock[l]`.
+4. **No same-turn reuse or chaining.** Because outputs land in `next_stock`, not in `current`, a token drives at most one transform per turn and no transform can feed another (or itself) this turn. Termination is trivial — autocatalytic recipes cannot run away. The cost is that a person does *one* thing per turn, so work transforms must embed metabolism (consume the worker's `food + air`) or working becomes a free way to survive.
+5. **Universal decay ⇒ storage is a transform.** At end of turn `stock = next_stock`; every un-re-emitted token decays. A resource persists only via a transform that re-creates it: `air → air` (free), `food + energy → food` (powered storage), `plant + energy → plant`. Population decline is emergent — an unfed person runs no person-emitting transform and is simply absent from `next_stock`. No explicit death rule.
+6. When consuming from the pool, decrement the local row of `current` first, then upstream rows in `locations`-list order. Consuming upstream + producing into `next_stock[l]` locally is how resources migrate down the DAG.
+
+**Open questions carried into M0:** initial-stock tuning for a viable steady state (with decay, every kept resource needs a live storage/production path each turn), and whether a person-based storage recipe (`food + person → food + person`) is worth allowing despite letting that worker dodge starvation.
 
 ---
 

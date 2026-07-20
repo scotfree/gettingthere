@@ -112,6 +112,24 @@ Rationale:
 - **Explicability.** The player can zoom from a ship-scale metric down to the individual agents producing it, and see exactly where a systemic effect comes from.
 - **Scales in the cloud.** More agents / bigger world → more serverless instances or a larger distributed job. Complexity is handled in code, not by assuming a single laptop.
 
+### The universal transform system (v0 substrate)
+
+The minimal mechanical core beneath everything is a single mechanism: **resources** and **transforms**, evaluated over a graph of **locations**.
+
+- **Resources** are named, counted tokens — `person`, `food`, `plant`, `energy`, `air`. Everything in the world, including people, is a resource count at some location.
+- **Transforms** are the only rule type: an input multiset and an output multiset, e.g. `farming: person + food + air + plant + energy → person + 2 food`. There are no special-case mechanics layered on top:
+  - *Catalysts* are just resources present in both input and output (the person in farming is required and re-emitted, so they persist).
+  - *Energy costs* are just energy in the input list.
+  - *Survival itself* is a transform — `person + food + air → person` — so population decline under food or air shortage is emergent, not a scripted rule.
+- **Universal decay is the master rule.** Each turn a location's next contents are *exactly* what its transforms produce; anything not re-emitted is gone. There are no passive stockpiles — a resource persists only because some transform re-creates it. **Storage is therefore itself a transform:** `air → air` is free-standing atmosphere; `food + energy → food` is refrigeration that costs power; a future "granary" building is just a source of a cheaper storage transform. This is what makes death fall out for free — a person with no food or air runs no survival transform, is not re-emitted, and is simply absent next turn — and it makes conservation a property you *engineer* with transforms rather than get by default.
+- **One activity per token per turn.** Because outputs land in a fresh next-turn buffer, a token drives at most one transform per turn: a person farms *or* idles-and-survives, not both. Work transforms embed metabolism (they consume the worker's food and air) so that being productive is not a way to dodge starvation. Labor is a real throughput constraint — jobs compete for the finite population.
+- **Locations** form a directed acyclic graph. A location's available pool is its own stock plus the stock of every location that lists it as a destination — upstream resources are usable downstream, so adjacency *is* the transport model. No separate logistics system in v0.
+- **Priority is specificity.** Transforms are an ordered list, by convention sorted in descending input-size order: the most demanding recipes claim the pool first, storage and generic recipes mop up what's left. Ties are broken by authored order. Ordering is the entire MVP order vocabulary — reprioritizing a location's transforms is one "order," and it is genuinely expressive because transforms contend for shared inputs.
+
+A scenario is therefore pure data — resource vocabulary, transform list, location DAG, initial stocks, evaluation order — which is the concrete form of "ship configuration is authored level design" (§5). See the implementation guide for the format and `scenarios_data/simple-world.json` for the minimal example.
+
+*Relation to the agent model:* in v0 a person is an undifferentiated token, which collapses the agent layer into resource counts. This is deliberate MVP compression, not a change of thesis — when the political layer needs individuals (dispositions, movements), person tokens become individual records participating in the same transforms, and the aggregation story is unchanged.
+
 ### Turn-based with replay
 The chosen interaction model, which resolves latency, scalability, multiplayer fairness, and player attention in one stroke:
 
