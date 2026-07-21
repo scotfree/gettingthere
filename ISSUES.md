@@ -1,3 +1,57 @@
+This doc is for transfer from other chats to the main project context. The top section "New Core Design Ideas" is to be directly added to the design and implmention docs. The second, "Unresolved From Conversation" and maybe the third, are notes on things that came up in conversation and we should likely add to an Open Questions section in the existing two main docs, or discard as already implemented or decided against. Once we've done that merge, I'll delete this doc.
+
+# New Core Design Ideas to Incorporate:
+
+## Getting There — Session Addendum (mechanics to fold into the transfer doc)
+
+### 1. Control as a resource (the keystone)
+
+Control over a location is not a separate permission system — it's an ordinary resource, produced and accumulated like any other.
+
+- You build/produce a **control resource** at a location (via its own production chain — some transform outputs it).
+- **Whoever holds the most control resource at a location earns the right to apply a priority move there** — i.e., to reorder that location's transform stack.
+- This makes scope-of-control an *emergent, earned* thing that grows through the same resource mechanics as everything else. You extend your reach by out-producing rivals in control resource at the locations you care about.
+- In multiplayer this is inherently contested: control is a majority check across whatever players have accumulated at that location, so influence footprints expand and collide geographically.
+
+### 2. Actions as transform outputs
+
+Transforms can output **actions**, not just resources. An action changes game state without being a storable/tradeable resource — the canonical one being a **priority move** (nudge a transform up/down the location's stack).
+
+- The right to *apply* a priority move is gated by the control-resource majority above.
+- Actions are contingent on the same input conditions as any transform output, so thresholds fall out for free ("only fires if ≥ N population / ≥ N of some cultural resource present").
+- Actions are **deterministic** (for MVP).
+- This is the slot where cultural effects, counter-influence operatives, etc. live — no new mechanic needed, just conditional transform outputs.
+
+### 3. Cultural resources are just resources
+
+No separate cultural system. A cultural resource (e.g. "back-to-the-land") is produced by its own chain (needs a specific production building, its own inputs), moves through the same logistics, and is **consumed when it takes effect** — i.e., when it triggers the action that nudges a transform stack.
+
+- Consumption gives natural attenuation: influence tends to be local unless you invest in carrying it further, exactly like shipping any perishable resource.
+- Resistance is native: break trade to starve incoming influence, or out-produce it with counter-influence. No special combat rules.
+- Any "tags" on cultural resources are for visualization/summarization only — no mechanical effect of their own.
+
+### 4. Transform input sets are tag-scoped
+
+A transform's available input pool is the union of one or more named input sets. Two default tags always exist:
+
+- **`local`** — resources physically in this location.
+- **`nearby`** — resources in adjacent upstream locations (the symmetric, osmotic default).
+- **`<TAG>`** — resources upstream along any edge carrying that tag.
+
+Tags are **static structure** assigned at map-build time (hand-painted or algorithmically, e.g. via a distance/gradient field). They carry zero per-turn state.
+
+### 5. Transport is just transforms (via directional tags)
+
+Shipping is not a separate mechanic — it's a transform whose input set is a directional tag. "Pull wood from `cityward` neighbors, output it here" moves wood one hop toward the city per turn; downstream locations running the same transform carry it onward.
+
+**Why tags are required (not optional):** most roads are symmetric edge pairs, so the raw graph is full of 2-cycles and topology alone carries no direction — a transport transform pulling on plain `nearby` would oscillate a resource back and forth. Each **tag defines an acyclic direction field** over the otherwise-cyclic graph: filter edges to `cityward` and you get a clean DAG (forest→town1→town2→town3→city) with no back-edge to pull along, so no oscillation. Counter-flow works because the reverse halves of the same roads carry the opposite tag (`forestward`), letting the same physical corridor move different resources in opposite directions with no state.
+
+**Notes / expected costs:**
+- A tag encodes flow toward **one** reference. Each distinct destination stuff should flow toward wants its own tag (or its own gradient field). Expect tags to proliferate by purpose — that's the honest cost, still fully static.
+- Gradient auto-assignment: compute distance-to-target per node at build time, tag each directed edge toward-target if its head is closer than its tail. Hand-painting and distance-field are two ways to populate the same edge-tag structure.
+- Location and resource tags are worth adding at the same time, but note they do *classification* work (what is this thing), distinct from edge tags doing *directional* work (which way does flow go). Same mechanism, different job.
+
+
 # Unresolved From Conversation
 
 Genuine gaps — things we gestured at but never pinned down:
