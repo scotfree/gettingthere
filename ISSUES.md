@@ -1,3 +1,16 @@
+# Unresolved From Conversation
+
+Genuine gaps — things we gestured at but never pinned down:
+
+The order/directive vocabulary is the big one. The whole interaction model is "assemble a rich bundle of orders," but the docs never enumerate what a player can actually do in a turn at each scale — zone an area, set a policy lever, allocate labor, etc. This is listed as an open question, but it's load-bearing for both the client and the feel of the game, and if it's blank, Claude Code will invent it.
+
+The core-loop metrics — both the unlock metrics that gate each expansion of scope, and the victory metrics for the tiered win conditions. Right now "tiered victory" and "hit visible targets to advance" are stated as concepts with no actual numbers or criteria behind them.
+
+A small scales-and-numbers reference. You mentioned concrete figures in passing — turn = day/week/month, journey = 100 to 1,000 years, population 10,000 down to 200 survivors — but they're scattered in prose. A tiny table of starting values saves Claude Code from guessing.
+
+The zoom-to-cause mechanic. Following the fish vendor, tracing a ship-scale metric down to the agents producing it — that's a signature feature and arguably the heart of the experience, but the client is just described as "thin." It deserves a real paragraph, because it's also a genuine UI challenge.
+
+Lower priority, worth a placeholder so they're not lost: multiplayer turn-resolution timing and the save/persistence model; a short non-goals / explicit-scope-boundaries section (so Claude Code doesn't gold-plate — e.g. no ship construction, no physics solver, no multiplayer in the MVP); art direction / visual tone (currently absent entirely); and a prior-art list (the other Generation Ship game, Kingdoms and Castles, Oxygen Not Included, and that climate-policy simulator you couldn't name — I think you're remembering En-ROADS, which is exactly the "pull a policy lever, watch consequences emerge" model you described).
 # Open Issues
 
 Lightweight issue log (GitHub API was unreachable when these were filed — promote
