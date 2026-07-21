@@ -56,6 +56,8 @@ The ground-level city builder. Individual agents live, eat, breathe, farm, log, 
 ### 3.2 Political / cultural management
 The mid-scale layer. The player operates policy levers rather than placing individual buildings — tax rates, incentives, restrictions, allocations. Cultural and ideological movements arise and spread (e.g. a "back-to-the-land" movement), each reshaping how settlements behave and therefore how resources flow. Politics is both the engine of scope progression and a primary source of in-game dynamics.
 
+Mechanically this is **not a separate system**: a cultural movement is a resource produced by a chain and consumed when it takes effect, and political authority is a control resource you accumulate at a location. Spread, attenuation, and resistance all fall out of ordinary production and logistics. See §6, *Control, actions, and culture*.
+
 ### 3.3 Ecosystem management
 The ship scale. Closed-loop biogeochemical cycles — carbon, oxygen, nitrogen, water, organic matter. The player treats the population as the biological machinery driving these loops and manages for *dynamic* stability: never static, always drifting, always requiring correction. Reference point: interactive global-climate policy simulators, where you pull an economic or policy lever here and watch consequences emerge somewhere unexpected — but here, on a sealed system where every output is also someone's input.
 
@@ -116,17 +118,41 @@ Rationale:
 
 The minimal mechanical core beneath everything is a single mechanism: **resources** and **transforms**, evaluated over a graph of **locations**.
 
-- **Resources** are named, counted tokens — `person`, `food`, `plant`, `energy`, `air`. Everything in the world, including people, is a resource count at some location.
+- **Resources** are named, counted tokens — `person`, `food`, `plant`, `energy`, `air`. Everything in the world is a resource count at some location: people, political **control**, and **cultural movements** are all ordinary resources, produced by their own chains and subject to the same decay and logistics as grain. There is no second kind of thing.
 - **Transforms** are the only rule type: an input multiset and an output multiset, e.g. `farming: person + food + air + plant + energy → person + 2 food`. There are no special-case mechanics layered on top:
   - *Catalysts* are just resources present in both input and output (the person in farming is required and re-emitted, so they persist).
   - *Energy costs* are just energy in the input list.
   - *Survival itself* is a transform — `person + food + air → person` — so population decline under food or air shortage is emergent, not a scripted rule.
+- **Transforms can output actions, not just resources.** An action changes game state without being a storable, shippable token — the canonical one being a **priority move** (nudge a transform up or down a location's stack). Because an action is just another output, it inherits the input conditions of its transform, so thresholds fall out for free: *"only fires if ≥ N population and ≥ N of some cultural resource is present."* Actions are deterministic in the MVP. This is the slot where cultural effects, counter-influence operatives, and policy levers live — no new mechanic required.
 - **Universal decay is the master rule.** Each turn a location's next contents are *exactly* what its transforms produce; anything not re-emitted is gone. There are no passive stockpiles — a resource persists only because some transform re-creates it. **Storage is therefore itself a transform:** `air → air` is free-standing atmosphere; `food + energy → food` is refrigeration that costs power; a future "granary" building is just a source of a cheaper storage transform. This is what makes death fall out for free — a person with no food or air runs no survival transform, is not re-emitted, and is simply absent next turn — and it makes conservation a property you *engineer* with transforms rather than get by default.
 - **One activity per token per turn.** Because outputs land in a fresh next-turn buffer, a token drives at most one transform per turn: a person farms *or* idles-and-survives, not both. Work transforms embed metabolism (they consume the worker's food and air) so that being productive is not a way to dodge starvation. Labor is a real throughput constraint — jobs compete for the finite population.
-- **Locations** form a directed acyclic graph. A location's available pool is its own stock plus the stock of every location that lists it as a destination — upstream resources are usable downstream, so adjacency *is* the transport model. No separate logistics system in v0.
-- **Priority is specificity.** Transforms are an ordered list, by convention sorted in descending input-size order: the most demanding recipes claim the pool first, storage and generic recipes mop up what's left. Ties are broken by authored order. Ordering is the entire MVP order vocabulary — reprioritizing a location's transforms is one "order," and it is genuinely expressive because transforms contend for shared inputs.
+- **Locations** are nodes in a graph of **tagged edges**, and a transform's available pool is the union of one or more **named input sets** rather than a fixed neighbourhood. Two tags always exist: `local` (resources physically here) and `nearby` (resources in adjacent upstream locations — the symmetric, osmotic default). Any other tag `<TAG>` means "resources upstream along edges carrying that tag." Tags are static structure assigned at map-build time and carry zero per-turn state. See *Tagged edges and transport* below.
+- **Priority is specificity.** Transforms are an ordered list, by convention sorted in descending input-size order: the most demanding recipes claim the pool first, storage and generic recipes mop up what's left. Ties are broken by authored order. Reordering a location's stack is the entire MVP order vocabulary, and it is genuinely expressive because transforms contend for shared inputs — but the *right* to reorder is earned rather than assumed. See *Control, actions, and culture* below.
 
-A scenario is therefore pure data — resource vocabulary, transform list, location DAG, initial stocks, evaluation order — which is the concrete form of "ship configuration is authored level design" (§5). See the implementation guide for the format and `scenarios_data/simple-world.json` for the minimal example.
+### Tagged edges and transport
+
+Shipping is not a separate mechanic. **Transport is a transform whose input set is a directional tag:** "pull wood from `cityward` neighbours, output it here" moves wood one hop toward the city per turn, and downstream locations running the same transform carry it onward. Logistics is thus made of the same parts as everything else.
+
+**Why tags are required rather than optional.** Most roads are symmetric edge pairs, so the raw location graph is full of 2-cycles and topology alone carries no direction — a transport transform pulling on plain `nearby` would slosh a resource back and forth forever. Each tag defines an **acyclic direction field** over the otherwise-cyclic graph: filter the edges down to `cityward` and you get a clean DAG (forest → town1 → town2 → city) with no back-edge to pull along, and therefore no oscillation. Counter-flow works because the reverse halves of the same roads carry the opposite tag (`forestward`), letting one physical corridor move different goods in opposite directions with no per-turn state at all.
+
+The honest cost: **a tag encodes flow toward one reference**, so each destination that stuff needs to flow toward wants its own tag or its own gradient field. Expect tags to proliferate by purpose. They stay fully static, which is what keeps them cheap.
+
+Tags can be hand-painted or generated: compute a distance-to-target field per node at build time, then tag each directed edge as toward-target where its head is closer than its tail. Both approaches populate the same edge-tag structure. Location and resource tags are worth adding at the same time, with one distinction kept clear — **edge tags do directional work** (which way does flow go) while location and resource tags do **classification work** (what kind of thing is this). Same mechanism, different jobs.
+
+*Status:* the v0 engine implements the `nearby` default only — today's "pool = own stock + all upstream stock" behaviour is exactly that one tag. Everything above is the design the engine grows into; see the implementation guide.
+
+### Control, actions, and culture
+
+**Control over a location is not a permission system — it is an ordinary resource.** You produce and accumulate a control resource at a location through its own production chain, exactly as you would grain or oxygen. Whoever holds the most control resource at a location earns the right to apply a priority move there. Scope of control therefore becomes *emergent and earned*: you extend your reach by out-producing rivals in control resource at the places you care about, and your influence footprint grows and collides with theirs geographically rather than being granted by a rule. In multiplayer this is inherently contested (see §8).
+
+This is the keystone that makes the other two ideas pay off:
+
+- **Priority moves are actions**, emitted by transforms like any other output — so the *ability* to reorder a stack is produced, and the *right* to apply it is the control-resource majority above. Orders stop being free player fiat and become something the world manufactures.
+- **Cultural movements are resources.** A cultural resource (say "back-to-the-land") is produced by its own chain, needs its own building and inputs, travels through the same logistics as anything else, and is **consumed when it takes effect** — that is, when it triggers the action that nudges a transform stack. Consumption gives natural attenuation for free: influence stays local unless you invest in carrying it further, exactly like shipping a perishable good. Resistance is native too — break the trade route to starve incoming influence, or out-produce it with counter-influence. No combat rules, no separate ideology system.
+
+Any tags on a cultural resource are for visualisation and summarisation only; they carry no mechanical effect of their own.
+
+A scenario is therefore pure data — resource vocabulary, transform list, locations and tagged edges, initial stocks, evaluation order — which is the concrete form of "ship configuration is authored level design" (§5). See the implementation guide for the format and `scenarios_data/simple-world.json` for the minimal example.
 
 *Relation to the agent model:* in v0 a person is an undifferentiated token, which collapses the agent layer into resource counts. This is deliberate MVP compression, not a change of thesis — when the political layer needs individuals (dispositions, movements), person tokens become individual records participating in the same transforms, and the aggregation story is unchanged.
 
@@ -164,6 +190,9 @@ Multiplayer is designed in **from the start**, not retrofitted — the cloud bac
 ### The cooperation/competition tension
 The closed system is the enforcement mechanism. Players can compete — even raid or conquer a neighbor's settlement, which is fun in the early game — but if aggression destabilizes the ship's ecology and triggers a cascade, **everyone loses**. Competition is bounded by shared survival. This is the multiplayer expression of "struggle is fine, collapse is not."
 
+### Contested control
+Because control is a resource (§6), multiplayer influence is a **majority check across whatever the players have accumulated at a location** — not a claim on territory. Two players investing in the same settlement are in a live production race, and the winner earns the right to reorder that location's transform stack until the balance shifts. Influence footprints therefore expand, overlap, and collide geographically as a consequence of where each player chose to build, with no separate diplomacy or conquest layer. Starving a rival's supply route is a legitimate and fully mechanical counter-move.
+
 ### Players at different scales
 Because the three systems operate at different scales, players can interact through different registers — one focused on local settlement management, another playing the political layer, another watching the ecosystem — and their actions collide in interesting, asymmetric ways. A hundred villages could each be a player managing the same low-level game, with the political layer emerging as real negotiation *between actual people*.
 
@@ -182,9 +211,30 @@ This is the key economy of the design: **one system that scales from solo to col
 
 ## 9. Open Questions to Resolve in Prototyping
 
+### Load-bearing — a blank here gets invented for us
+
+These are gaps the build will hit head-on. If they are still empty when the work starts, whoever (or whatever) is implementing will fill them in by guessing.
+
+- **The order/directive vocabulary at each scale.** The whole interaction model is "assemble a rich bundle of orders," but nothing yet enumerates what a player can actually *do* in a turn — zone an area, set a policy lever, allocate labour, and so on. This is load-bearing for both the client and the feel of the game. Note it now interacts with control-as-a-resource (§6): some orders are earned rather than always available.
+- **Core-loop metrics, both halves.** The unlock metrics that gate each expansion of scope, *and* the victory metrics behind the tiered win conditions (§7). "Tiered victory" and "hit visible targets to advance" are currently concepts with no numbers or criteria behind them.
+- **A scales-and-numbers reference.** Concrete figures exist in prose but are scattered: turn = day/week/month, journey = 100–1,000 years, population 10,000 down to 200 survivors. A small table of starting values prevents guesswork.
+- **The zoom-to-cause mechanic.** Following the fish vendor; tracing a ship-scale metric down to the agents producing it. This is a signature feature and arguably the heart of the experience, but the client is described only as "thin." It needs a real design paragraph, because it is also a genuine UI challenge.
 - Where exactly does the perspective/control shift from spatial placement to policy levers, and is it gradual or stepped?
-- What are the specific unlock metrics gating each expansion of scope?
 - How lightweight can the agent model be while still producing believable aggregate ecology *and* politics?
-- What is the concrete order/directive vocabulary at each scale?
+
+### Raised by control, actions, and tagged edges (§6)
+
+- What produces control resource, and at what rate? If it is cheap, control is trivially bought; if it is dear, the map ossifies.
+- How are control-majority **ties** broken, and is the check re-evaluated every turn or latched until beaten?
+- Can a player accumulate control at a location where they hold nothing else — influence at a distance — or does it require a physical foothold?
+- Do cultural resources decay in transit, or only on use? Attenuation is claimed to be natural, but under universal decay the actual falloff curve depends on the storage transforms along the route.
+- How many tags does a real map need before authoring them becomes the bottleneck? The gradient-field generator is the hedge; it needs testing on a non-trivial map.
+
+### Lower priority — placeholders so they are not lost
+
+- Multiplayer turn-resolution timing, and the save/persistence model.
+- A short **non-goals / scope-boundaries** section, so the build does not gold-plate: no ship construction, no physics solver, no multiplayer in the MVP.
+- Art direction and visual tone — currently absent from this document entirely.
+- A prior-art list: the other Generation Ship game, *Kingdoms and Castles*, *Oxygen Not Included*, and the climate-policy simulator behind §3.3's reference point — most likely **En-ROADS**, which matches the described "pull a policy lever, watch consequences emerge" model, though this needs confirming.
 - What do comparable server-authoritative, turn-and-replay commercial games teach us about shipping and monetization?
 - How is determinism guaranteed so a submitted turn replays identically every time (see implementation guide)?

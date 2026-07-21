@@ -134,10 +134,39 @@ One JSON file per scenario, four sections. Authoring uses human-friendly count-d
 
 - **`resources`** — the global vocabulary. Its order defines the resource enumeration used everywhere else at runtime.
 - **`transforms`** — ordered list; **position is priority**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last); ties broken by authored order. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
-- **`locations`** — nodes of a DAG. `destinations` are location ids (edges point downstream). Initial stocks live here.
+- **`locations`** — graph nodes. `destinations` are location ids (edges point downstream). Initial stocks live here. **v0 assumes the graph is acyclic**, which is what makes a single evaluation pass well-defined; the general design allows symmetric edge pairs and recovers direction from tags instead (see the extensions below).
 - **`evaluation_order`** — explicit total order over location ids for turn processing. Explicit rather than derived so scenario authors control contention priority.
 
 The reference example is `scenarios_data/simple-world.json`.
+
+#### Extensions: tagged edges and action outputs
+
+*Designed (GDD §6), not yet implemented. The v0 loader supports only the four sections above; the pool rule it implements is exactly the `nearby` tag below.*
+
+```json
+{
+  "transforms": [
+    { "name": "haul_food_cityward",
+      "input_sets": ["cityward"],
+      "inputs":  { "food": 1, "person": 1 },
+      "outputs": { "food": 1, "person": 1 } },
+
+    { "name": "council",
+      "inputs":  { "person": 4, "control": 2 },
+      "outputs": { "person": 4, "control": 2 },
+      "actions": [ { "type": "priority_move", "transform": "farming", "delta": -1 } ] }
+  ],
+  "edges": [
+    { "from": "forest", "to": "town", "tags": ["cityward"] },
+    { "from": "town", "to": "forest", "tags": ["forestward"] }
+  ]
+}
+```
+
+- **`edges`** — replaces `destinations` as the general form; `"destinations": ["x"]` stays as sugar for one untagged edge, which participates in `nearby`. Edges are directed and a symmetric road is two of them, each carrying the opposite directional tag. Tags are **static structure** with zero per-turn state, so they compile once into per-tag upstream lists exactly like `upstream` today.
+- **`input_sets`** — the named pools a transform may draw from, defaulting to `["local", "nearby"]` (current behaviour). `local` is this location's own stock; `nearby` is every location with an edge into this one; any other tag is the upstream set restricted to edges carrying that tag. The available pool is the **union** of the listed sets.
+- **`actions`** — an output channel parallel to `outputs`, for effects that change state without being storable tokens. `priority_move` is the canonical (and, for the MVP, likely only) type: it shifts a named transform up or down this location's stack by `delta`. Actions fire under the same `n`-firings arithmetic as resource outputs, which is what gives thresholds for free — a `council` needing 4 people and 2 control simply does not fire below that.
+- A **transport transform** is nothing special: it names a directional tag in `input_sets`, and consumes-then-re-emits the goods, moving them one hop per turn. Its worker is a catalyst; the hop is the whole effect.
 
 ### 3.2 Runtime representation
 
@@ -147,6 +176,7 @@ Compile the config once at load; the tick loop is pure integer array arithmetic 
 - **World stock:** an `L × R` integer matrix `stock[l][r]`. This *is* the mutable world state (plus tick counter and RNG seed).
 - **Transforms:** two `T × R` integer matrices, `need` and `emit`.
 - **Availability pool** for location `l`: `avail = stock[l] + Σ stock[u]` over upstream locations `u` (those listing `l` as a destination). Never materialized as a merged collection — it's a vector sum.
+  - Under tagged edges (§3.1) this generalizes to *per input set*: precompute `upstream_by_tag[tag][l]` at load time, then `avail = Σ stock[u]` over the union of the sets the transform names. Union, not sum — a location reachable by two tags must be counted once. `local` is the singleton `[l]`; `nearby` is today's `upstream[l]`. The pool is therefore per-`(location, transform)` rather than per-location, which is the one real cost of the change.
 - **Firing count:** transform `t` fires `n = min over resources of floor(avail[r] / need[t][r])` times at `l` — the number of *simultaneous* firings the pool supports (0 if any need exceeds supply).
 - **Firing:** subtract `n * need[t]` from `current` (this turn's depleting stock; see §3.3 for which rows), add `n * emit[t]` to `next_stock[l]`.
 - **Aggregation:** ship-wide totals are column sums of `stock`; per-location and per-region metrics are row slices. The M1 ecosystem metrics fall out of this for free.
@@ -166,7 +196,19 @@ gone*. Next-turn contents are exactly what the transforms produced.
 5. **Universal decay ⇒ storage is a transform.** At end of turn `stock = next_stock`; every un-re-emitted token decays. A resource persists only via a transform that re-creates it: `air → air` (free), `food + energy → food` (powered storage), `plant + energy → plant`. Population decline is emergent — an unfed person runs no person-emitting transform and is simply absent from `next_stock`. No explicit death rule.
 6. When consuming from the pool, decrement the local row of `current` first, then upstream rows in `locations`-list order. Consuming upstream + producing into `next_stock[l]` locally is how resources migrate down the DAG.
 
-**Open questions carried into M0:** initial-stock tuning for a viable steady state (with decay, every kept resource needs a live storage/production path each turn), and whether a person-based storage recipe (`food + person → food + person`) is worth allowing despite letting that worker dodge starvation.
+7. **Actions are collected during the pass and applied after it.** A transform that fires `n` times emits its actions `n` times alongside its resource outputs, but a `priority_move` mutates `transform_order`, which is world state the pass is *currently iterating over*. Applying one mid-pass would make a location's stack change under its own evaluation. So: buffer actions during the pass, then apply them in one deterministic phase at the end of the turn, against `next_stock`'s world. This keeps the pass a pure read of a fixed order and preserves "one pass per turn."
+
+   Determinism requires a **total order over buffered actions** — sort by `(evaluation_order index, transform priority index, action index)`, never by dict or set iteration. Two actions moving the same transform compose by summing their deltas before clamping into range, so the outcome does not depend on which was applied first.
+
+**Open questions carried into M0:** initial-stock tuning for a viable steady state (with decay, every kept resource needs a live storage/production path each turn — issue #1), whether upstream feeders should be evaluated before their consumers (issue #2), and whether a person-based storage recipe (`food + person → food + person`) is worth allowing despite letting that worker dodge starvation (issue #3).
+
+### 3.4 Control gates who may reorder
+
+Priority moves are *produced* (§3.1 actions) but not *freely applied*. The right to apply one at a location belongs to whoever holds the most **control resource** there (GDD §6):
+
+- Control is an ordinary resource — same decay, same storage-is-a-transform rule, same logistics. It needs a production chain and a reason to be scarce.
+- At action-application time, resolve the control majority per location, then apply only the actions belonging to the holder. In single-player this is nearly a no-op; the machinery matters the moment there are two players.
+- Player-submitted orders and transform-emitted actions land in the **same buffer** and go through the same gate. An "order" is therefore best modelled as an action the player is entitled to inject, not a separate code path — which keeps `run_turn(world, orders, seed)` pure and keeps one set of rules to test.
 
 ---
 
@@ -186,7 +228,7 @@ Each milestone is independently demoable and de-risks the *next* one. Ship nothi
 - *Proves:* the closed-system ecology genuinely emerges from agents — the core design claim.
 
 ### M2 — Turn processor + replay
-- Define the Order vocabulary (start tiny: zone an area, build a structure, allocate labor).
+- Define the Order vocabulary (start tiny: zone an area, build a structure, allocate labor). Model an order as an action the player injects into the same buffer transforms emit into (§3.4), so there is one application path rather than two.
 - Implement `run_turn(world, orders, seed) -> (world', replay)`.
 - Serialize a replay as per-tick frames + summary time series.
 - *Proves:* the turn/replay loop end-to-end, headless.
@@ -239,7 +281,20 @@ Keep `sim/` ruthlessly pure: no network, no clock, no framework imports, no ambi
 
 ---
 
-## 6. First session with Claude Code — concrete kickoff
+## 6. Open questions with implementation consequences
+
+Design-side questions live in GDD §9. These are the ones that change what gets built, and they should be answered before the milestone that depends on them.
+
+- **The Order vocabulary itself** (blocks M2). Nothing yet enumerates what a player may do in a turn at each scale. §3.4 argues orders should be actions in the shared buffer, which constrains the shape but not the contents.
+- **Where actions apply, confirmed against a real scenario** (blocks M2). §3.3 step 7 buffers them to end-of-turn; that is reasoned, not tested. A scenario where a `priority_move` and the transform it moves both fire in the same turn is the case to write first.
+- **Control production and majority resolution** (blocks multiplayer, post-MVP). Rate, tie-breaking, and whether the majority latches or is re-checked each turn. Cheap control makes the map trivially buyable; dear control makes it ossify.
+- **Per-`(location, transform)` pools** (blocks tagged edges). §3.2 notes that input sets move pool computation from per-location to per-transform. Worth measuring before committing — it multiplies the inner loop by the number of distinct input-set combinations in play.
+- **Save/persistence model and multiplayer turn-resolution timing.** Deferred, but the append-only turn log in §2 is the assumed substrate, and the pure-function turn model is what makes it re-derivable.
+- **A non-goals section.** Explicitly out for the MVP: ship construction, a physics solver, multiplayer netcode, exotic geometries. Written down so the build does not drift into them.
+
+---
+
+## 7. First session with Claude Code — concrete kickoff
 
 Reasonable order of operations to open the project:
 
