@@ -5,7 +5,7 @@
   "transforms": [
     {
       "name": "farming",
-      "inputs":  { "person": 1, "food": 1, "air": 1, "plant": 1, "energy": 1 },
+      "inputs":  { "person": 1, "plant": 1 },
       "outputs": { "person": 1, "food": 2 }
     },
     {
