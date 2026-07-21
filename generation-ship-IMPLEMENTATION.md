@@ -133,7 +133,7 @@ One JSON file per scenario, four sections. Authoring uses human-friendly count-d
 ```
 
 - **`resources`** — the global vocabulary. Its order defines the resource enumeration used everywhere else at runtime.
-- **`transforms`** — ordered list; **position is priority**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last); ties broken by authored order. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
+- **`transforms`** — ordered list; **authored position is the default priority score**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last); ties broken by authored order. Priority is a *score* rather than a slot so that nudges (below) can superpose commutatively. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
 - **`locations`** — graph nodes. `destinations` are location ids (edges point downstream). Initial stocks live here. **v0 assumes the graph is acyclic**, which is what makes a single evaluation pass well-defined; the general design allows symmetric edge pairs and recovers direction from tags instead (see the extensions below).
 - **`evaluation_order`** — explicit total order over location ids for turn processing. Explicit rather than derived so scenario authors control contention priority.
 
@@ -151,10 +151,14 @@ The reference example is `scenarios_data/simple-world.json`.
       "inputs":  { "food": 1, "person": 1 },
       "outputs": { "food": 1, "person": 1 } },
 
-    { "name": "council",
-      "inputs":  { "person": 4, "control": 2 },
-      "outputs": { "person": 4, "control": 2 },
-      "actions": [ { "type": "priority_move", "transform": "farming", "delta": -1 } ] }
+    { "name": "staff_control_terminal",
+      "inputs":  { "control_terminal": 1, "person": 1, "energy": 1 },
+      "outputs": { "control_terminal": 1, "person": 1, "nudge": 1 } },
+
+    { "name": "back_to_the_land_agitates",
+      "inputs":  { "back_to_the_land": 1, "person": 2 },
+      "outputs": { "person": 2 },
+      "actions": [ { "type": "priority_nudge", "transform": "farming", "delta": 1 } ] }
   ],
   "edges": [
     { "from": "forest", "to": "town", "tags": ["cityward"] },
@@ -165,8 +169,14 @@ The reference example is `scenarios_data/simple-world.json`.
 
 - **`edges`** — replaces `destinations` as the general form; `"destinations": ["x"]` stays as sugar for one untagged edge, which participates in `nearby`. Edges are directed and a symmetric road is two of them, each carrying the opposite directional tag. Tags are **static structure** with zero per-turn state, so they compile once into per-tag upstream lists exactly like `upstream` today.
 - **`input_sets`** — the named pools a transform may draw from, defaulting to `["local", "nearby"]` (current behaviour). `local` is this location's own stock; `nearby` is every location with an edge into this one; any other tag is the upstream set restricted to edges carrying that tag. The available pool is the **union** of the listed sets.
-- **`actions`** — an output channel parallel to `outputs`, for effects that change state without being storable tokens. `priority_move` is the canonical (and, for the MVP, likely only) type: it shifts a named transform up or down this location's stack by `delta`. Actions fire under the same `n`-firings arithmetic as resource outputs, which is what gives thresholds for free — a `council` needing 4 people and 2 control simply does not fire below that.
 - A **transport transform** is nothing special: it names a directional tag in `input_sets`, and consumes-then-re-emits the goods, moving them one hop per turn. Its worker is a catalyst; the hop is the whole effect.
+
+**The two nudge channels.** Both produce priority deltas; they differ only in who supplies the target.
+
+- **`nudge` is an ordinary resource** — a blank cheque. `staff_control_terminal` above shows the shape: a terminal plus a worker plus power yields one unspecified nudge per turn, with the terminal as a catalyst. Being a resource means it obeys everything else — it appears in `stock`, it is validated by ordinary arithmetic, and **an unspent nudge decays like anything else**, so political capital is use-it-or-lose-it. Nudges are **spent at the location holding them**; they are deliberately *not* shippable, which is what keeps ownership off the token (see §3.4).
+- **`actions`** — an output channel parallel to `outputs`, for effects that are not storable tokens. `priority_nudge` is the canonical (and for the MVP, likely only) type, carrying a `transform` and a signed `delta`. This is the pre-targeted channel: a cultural resource knows what it wants, so it names the target itself and needs no player. Actions fire under the same `n`-firings arithmetic as resource outputs, which is what gives thresholds for free — the agitation transform above simply does not fire below 2 people.
+
+**The order vocabulary is then one verb:** spend `k` nudges held at a location on signed deltas, e.g. `SpendNudges("town", {"farming": +2, "logging": -1})`. Validation is a resource check (do you hold 3 nudges there?), and the result joins the pre-targeted deltas in a single list.
 
 ### 3.2 Runtime representation
 
@@ -196,19 +206,29 @@ gone*. Next-turn contents are exactly what the transforms produced.
 5. **Universal decay ⇒ storage is a transform.** At end of turn `stock = next_stock`; every un-re-emitted token decays. A resource persists only via a transform that re-creates it: `air → air` (free), `food + energy → food` (powered storage), `plant + energy → plant`. Population decline is emergent — an unfed person runs no person-emitting transform and is simply absent from `next_stock`. No explicit death rule.
 6. When consuming from the pool, decrement the local row of `current` first, then upstream rows in `locations`-list order. Consuming upstream + producing into `next_stock[l]` locally is how resources migrate down the DAG.
 
-7. **Actions are collected during the pass and applied after it.** A transform that fires `n` times emits its actions `n` times alongside its resource outputs, but a `priority_move` mutates `transform_order`, which is world state the pass is *currently iterating over*. Applying one mid-pass would make a location's stack change under its own evaluation. So: buffer actions during the pass, then apply them in one deterministic phase at the end of the turn, against `next_stock`'s world. This keeps the pass a pure read of a fixed order and preserves "one pass per turn."
+7. **No action ever mutates state the current pass reads.** This is the invariant, and `priority_nudge` satisfies it by construction: a nudge produced during turn N cannot affect turn N, because the turn model already separates producing from acting. A transform firing `n` times emits its actions `n` times, but those deltas are for *next* turn's stack. Nothing self-modifies mid-pass, so the pass stays a pure read of a fixed order and "one pass per turn" holds unchanged.
 
-   Determinism requires a **total order over buffered actions** — sort by `(evaluation_order index, transform priority index, action index)`, never by dict or set iteration. Two actions moving the same transform compose by summing their deltas before clamping into range, so the outcome does not depend on which was applied first.
+   **All priority deltas take effect between passes**, in the gap where nothing is running: pre-targeted deltas from `actions` land at the close of the turn that produced them (so the player can see the new order in the replay and respond to it), and player `SpendNudges` deltas land in `apply_orders` at the open of the next turn. Nothing evaluates in between, so the two compose into a single application.
+
+   **Determinism needs no ordering rule**, which is the real payoff of deltas over slot moves. Adding to a score is commutative, so deltas from any number of sources — a player's nudges, three cultural movements, a rival — sum to the same result regardless of arrival order. There is no tiebreak to get wrong and no dict-iteration hazard. Contrast slot-swapping ("move farming up one"), which is *not* commutative and would have needed exactly the kind of total-order rule this avoids.
+
+   Deltas **persist** until pushed back the other way (matching today's `SetTransformPriority` policy semantics). Because the score is only ever a sort key, this saturates rather than running away, at the cost of hysteresis on entrenched positions — see the open questions in §6.
 
 **Open questions carried into M0:** initial-stock tuning for a viable steady state (with decay, every kept resource needs a live storage/production path each turn — issue #1), whether upstream feeders should be evaluated before their consumers (issue #2), and whether a person-based storage recipe (`food + person → food + person`) is worth allowing despite letting that worker dodge starvation (issue #3).
 
-### 3.4 Control gates who may reorder
+### 3.4 Control, and why there is no arbitration
 
-Priority moves are *produced* (§3.1 actions) but not *freely applied*. The right to apply one at a location belongs to whoever holds the most **control resource** there (GDD §6):
+Priority nudges are *produced* rather than freely issued, but **nothing decides who "controls" a location** — there is no majority check, no threshold, and no ownership rule to implement. Deltas from every source superpose (§3.3 step 7), so a location pushed by a player and two cultural movements at once simply sums them.
 
-- Control is an ordinary resource — same decay, same storage-is-a-transform rule, same logistics. It needs a production chain and a reason to be scarce.
-- At action-application time, resolve the control majority per location, then apply only the actions belonging to the holder. In single-player this is nearly a no-op; the machinery matters the moment there are two players.
-- Player-submitted orders and transform-emitted actions land in the **same buffer** and go through the same gate. An "order" is therefore best modelled as an action the player is entitled to inject, not a separate code path — which keeps `run_turn(world, orders, seed)` pure and keeps one set of rules to test.
+This is worth stating plainly because it deletes machinery a permission system would need:
+
+- **No per-location owner**, no tie-breaking, no latch-versus-recheck question.
+- **No per-token ownership**, and therefore no player dimension on `stock`, which stays `(L, R)`. This holds *because* blank nudges are spent where produced (§3.1): a nudge sitting in a location was necessarily produced there, so "who may spend it" is answered by the location, not by a field on the token. Making nudges shippable would break this and force an owner onto the token — which is the reason they are not.
+- **Influence at a distance still works**, via the asymmetry: culture travels, authority does not. You ship a cultural resource into a distant settlement and it generates pre-targeted nudges locally. Reach is a logistics problem, exactly like everything else.
+
+The player's turn is therefore not a separate code path. `SpendNudges` consumes a resource the world produced and emits deltas into the same list that `actions` feed, so `run_turn(world, orders, seed)` keeps one set of rules to test rather than two.
+
+*Multiplayer note:* the open question is not arbitration but **attribution** — if two players hold nudges in the same location, the submission API needs to know which player may spend which. Since nudges are local-use, the cheapest answer is that players own *locations* and nudge-spending rights follow from that; no token-level owner is required. Deferred with the rest of multiplayer, but the format above does not preclude it.
 
 ---
 
@@ -228,7 +248,7 @@ Each milestone is independently demoable and de-risks the *next* one. Ship nothi
 - *Proves:* the closed-system ecology genuinely emerges from agents — the core design claim.
 
 ### M2 — Turn processor + replay
-- Define the Order vocabulary (start tiny: zone an area, build a structure, allocate labor). Model an order as an action the player injects into the same buffer transforms emit into (§3.4), so there is one application path rather than two.
+- Define the Order vocabulary. The transform-system answer is one verb — spend nudges on signed priority deltas (§3.1) — which shares an application path with transform-emitted actions (§3.4), so there is one set of rules rather than two.
 - Implement `run_turn(world, orders, seed) -> (world', replay)`.
 - Serialize a replay as per-tick frames + summary time series.
 - *Proves:* the turn/replay loop end-to-end, headless.
@@ -285,9 +305,11 @@ Keep `sim/` ruthlessly pure: no network, no clock, no framework imports, no ambi
 
 Design-side questions live in GDD §9. These are the ones that change what gets built, and they should be answered before the milestone that depends on them.
 
-- **The Order vocabulary itself** (blocks M2). Nothing yet enumerates what a player may do in a turn at each scale. §3.4 argues orders should be actions in the shared buffer, which constrains the shape but not the contents.
-- **Where actions apply, confirmed against a real scenario** (blocks M2). §3.3 step 7 buffers them to end-of-turn; that is reasoned, not tested. A scenario where a `priority_move` and the transform it moves both fire in the same turn is the case to write first.
-- **Control production and majority resolution** (blocks multiplayer, post-MVP). Rate, tie-breaking, and whether the majority latches or is re-checked each turn. Cheap control makes the map trivially buyable; dear control makes it ossify.
+- **The Order vocabulary itself** (blocks M2). §3.1 now fixes the *shape* — spend nudges on signed deltas — but not the contents at larger scope. Whether a ship-scale turn is "many nudges at many locations" or "nudges at aggregate locations" is the open half, and it is the same question as GDD §9's verb-changes-with-scope tension.
+- **Priority as a score, confirmed against a real scenario** (blocks M2). §3.3 argues deltas onto a sort key rather than slot moves, which is what makes superposition commutative. Untested. The case to write first: two sources nudging the same location in the same turn, asserted to give an identical stack under both arrival orders.
+- **Nudge economics** (blocks M4). What a control terminal costs, and how many nudges per turn it yields. This is the main balance dial for the whole political layer — cheap terminals make political capital trivial, dear ones ossify the map — and there is currently no number attached to it.
+- **Delta clamping** (blocks nothing yet). Deltas persist and saturate as a sort key, but entrenched positions gain hysteresis proportional to how long they were held. Bounding the score range is the hedge if that proves too stiff at the table.
+- **Nudge attribution in multiplayer** (blocks multiplayer, post-MVP). Not arbitration — that is gone — but which player may spend which nudges when two hold them in one location. Local-use nudges mean location ownership probably suffices; see §3.4.
 - **Per-`(location, transform)` pools** (blocks tagged edges). §3.2 notes that input sets move pool computation from per-location to per-transform. Worth measuring before committing — it multiplies the inner loop by the number of distinct input-set combinations in play.
 - **Save/persistence model and multiplayer turn-resolution timing.** Deferred, but the append-only turn log in §2 is the assumed substrate, and the pure-function turn model is what makes it re-derivable.
 - **A non-goals section.** Explicitly out for the MVP: ship construction, a physics solver, multiplayer netcode, exotic geometries. Written down so the build does not drift into them.
