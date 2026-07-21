@@ -227,27 +227,44 @@ def _resource_tip(rf, runtime):
 # rendering
 # --------------------------------------------------------------------------
 
+STATIC_WIDTH = 4.4     # no replay data: every rule weighted equally
+DEAD_WIDTH = 2.4       # observed, but never fired
+MIN_WIDTH = 3.6        # fired at least once
+SPAN_WIDTH = 7.2       # added on top, by sqrt of share of the busiest edge
+
+ARROW_SCALE = 2.1      # arrowhead length as a multiple of stroke width...
+ARROW_MIN = 14         # ...clamped to this range, in user units
+ARROW_MAX = 22
+
+
 def _width_for(volume, vmax):
     if volume <= 0:
-        return 1.2
-    return 1.8 + 3.6 * math.sqrt(volume / vmax) if vmax else 2.4
+        return DEAD_WIDTH
+    return MIN_WIDTH + SPAN_WIDTH * math.sqrt(volume / vmax) if vmax else STATIC_WIDTH
 
 
 def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
          width, height, uid):
     centre = (width / 2, height / 2)
     defs, edges, nodes, tips = [], [], [], {}
+    groups: dict[str, list[str]] = {}          # element id -> ids to highlight with it
+    edges_of_transform: dict[str, list[str]] = {}
     seen_markers = set()
 
-    def marker(idx):
-        mid = f"{uid}-arw-{idx}"
+    def marker(idx, stroke_w):
+        # Head size tracks the shaft but is clamped, so it always reads as an
+        # arrow (never a blob on the thick edges, never a speck on the thin ones).
+        # refX=10 puts the tip exactly on the trimmed path end, i.e. the node edge.
+        size = round(min(ARROW_MAX, max(ARROW_MIN, ARROW_SCALE * stroke_w)))
+        mid = f"{uid}-arw-{idx}-{size}"
         if mid not in seen_markers:
             seen_markers.add(mid)
             defs.append(
-                f"<marker id='{mid}' viewBox='0 0 10 10' refX='9' refY='5' "
-                f"markerWidth='7' markerHeight='7' orient='auto-start-reverse' "
+                f"<marker id='{mid}' viewBox='0 0 10 10' refX='10' refY='5' "
+                f"markerWidth='{size}' markerHeight='{size}' orient='auto' "
                 f"markerUnits='userSpaceOnUse'>"
-                f"<path d='M 0 1 L 10 5 L 0 9 z' fill='var(--gt-c{idx})'/></marker>"
+                f"<path d='M 0 0.4 L 10 5 L 0 9.6 L 2.8 5 z' "
+                f"fill='var(--gt-c{idx})'/></marker>"
             )
         return mid
 
@@ -256,7 +273,8 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
     ridx = scenario.resource_index
 
     # ---- edges ---------------------------------------------------------
-    edge_specs = []   # (path, label_pos, qty_text, colour_idx, volume, tip, key)
+    # (path, label_pos, qty, colour_idx, volume, tip, owning transform or None, vmax)
+    edge_specs = []
     if view == "transforms":
         G = bipartite_graph(scenario, tfacts)
         vols = []
@@ -289,8 +307,7 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
                         else f"<div class='gt-tip-obs'><b>{vol}</b> {_esc(res)} "
                              f"{_esc(verb.rstrip('s'))}d over {runtime.ticks} ticks "
                              f"({n} firings)</div>")
-            edge_specs.append((path, lab, qty, ridx[res], vol, tip,
-                               f"r:{res}|t:{tname}", vmax))
+            edge_specs.append((path, lab, qty, ridx[res], vol, tip, tname, vmax))
     else:
         G = resource_graph(scenario, tfacts)
         vols = []
@@ -319,20 +336,21 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
                            else f" <em>· {n}×</em>")
                 tip += (f"<div class='gt-tip-line'><b>{_esc(tn)}</b> "
                         f"<span>{_esc(f.recipe)}</span>{obs}</div>")
-            edge_specs.append((path, lab, None, ridx[a], vol, tip,
-                               f"{a}->{b}", vmax))
+            edge_specs.append((path, lab, None, ridx[a], vol, tip, None, vmax))
 
-    for i, (path, lab, qty, cidx, vol, tip, key, vmax) in enumerate(edge_specs):
+    for i, (path, lab, qty, cidx, vol, tip, tname, vmax) in enumerate(edge_specs):
         eid = f"{uid}-{view}-e{i}"
         tips[eid] = tip
+        if tname:
+            edges_of_transform.setdefault(tname, []).append(eid)
         dead = runtime is not None and vol == 0
-        w = _width_for(vol, vmax) if runtime is not None else 2.2
+        w = _width_for(vol, vmax) if runtime is not None else STATIC_WIDTH
         cls = "gt-edge" + (" gt-edge-dead" if dead else "")
         edges.append(
             f"<g class='{cls}' data-id='{eid}' data-c='{cidx}'>"
             f"<path class='gt-hit' d='{path}'/>"
             f"<path class='gt-line' d='{path}' stroke='var(--gt-c{cidx})' "
-            f"stroke-width='{w:.2f}' marker-end='url(#{marker(cidx)})'/>"
+            f"stroke-width='{w:.2f}' marker-end='url(#{marker(cidx, w)})'/>"
             f"</g>"
         )
         if qty and qty > 1:
@@ -367,6 +385,13 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
             w, h = t_sizes[f.name]
             nid = f"{uid}-{view}-n-t-{f.name}"
             tips[nid] = _transform_tip(f, runtime)
+            # hovering a transform lights up its whole recipe: every edge it owns
+            # plus the resources on both ends of them
+            groups[nid] = (
+                [nid]
+                + edges_of_transform.get(f.name, [])
+                + [f"{uid}-{view}-n-{r}" for r in sorted(set(f.inputs) | set(f.outputs))]
+            )
             n = _fires(runtime, f.name)
             dead = " gt-node-dead" if n == 0 else ""
             nodes.append(
@@ -382,7 +407,7 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
            f"<defs>{''.join(defs)}</defs>"
            f"<g class='gt-edges'>{''.join(edges)}</g>"
            f"<g class='gt-nodes'>{''.join(nodes)}</g></svg>")
-    return svg, tips
+    return svg, tips, groups
 
 
 _CSS = """
@@ -409,9 +434,11 @@ _CSS = """
 #UID .gt-svg { display:block; width:100%; height:auto; overflow:visible; }
 #UID .gt-svg.hidden { display:none; }
 
-#UID .gt-line { fill:none; stroke-linecap:round; opacity:0.85; }
-#UID .gt-hit { fill:none; stroke:transparent; stroke-width:16; cursor:pointer; }
-#UID .gt-edge-dead .gt-line { stroke-dasharray:3 5; opacity:0.3; }
+#UID .gt-edge { opacity:0.85; }
+#UID .gt-line { fill:none; stroke-linecap:round; }
+#UID .gt-hit { fill:none; stroke:transparent; stroke-width:20; cursor:pointer; }
+#UID .gt-edge-dead { opacity:0.32; }
+#UID .gt-edge-dead .gt-line { stroke-dasharray:4 6; }
 #UID .gt-qty circle { fill:var(--gt-surface); stroke:var(--gt-border); }
 #UID .gt-qty text { font-size:11px; font-weight:650; fill:var(--gt-ink2);
   text-anchor:middle; dominant-baseline:central; pointer-events:none; }
@@ -426,7 +453,8 @@ _CSS = """
 
 #UID.dim .gt-edge, #UID.dim .gt-node, #UID.dim .gt-qty { opacity:0.13; }
 #UID.dim .gt-edge.hot, #UID.dim .gt-node.hot, #UID.dim .gt-qty.hot { opacity:1; }
-#UID .gt-edge.hot .gt-line { opacity:1; stroke-width:5; stroke-dasharray:none; }
+/* no stroke-width override on hover: width encodes volume, so changing it lies */
+#UID .gt-edge.hot .gt-line { stroke-dasharray:none; }
 
 #UID .gt-tip { position:absolute; z-index:20; pointer-events:none; opacity:0;
   transition:opacity .09s; max-width:330px; background:var(--gt-surface);
@@ -465,10 +493,13 @@ _JS = """
 (function(){
   var root=document.getElementById("UID");
   if(!root||root.dataset.wired)return; root.dataset.wired="1";
-  var tips=TIPS, tip=root.querySelector(".gt-tip"),
+  var tips=TIPS, groups=GROUPS, tip=root.querySelector(".gt-tip"),
       stage=root.querySelector(".gt-stage");
   function related(id){
-    return root.querySelectorAll('[data-id="'+CSS.escape(id)+'"]');
+    // a transform node carries its whole recipe; everything else is just itself
+    var ids=groups[id]||[id];
+    return root.querySelectorAll(ids.map(function(i){
+      return '[data-id="'+CSS.escape(i)+'"]';}).join(","));
   }
   function place(ev){
     var b=stage.getBoundingClientRect(), x=ev.clientX-b.left+14, y=ev.clientY-b.top+14;
@@ -515,11 +546,12 @@ def render_html(scenario, runtime=None, width=980, height=620, title=None) -> st
     t_sizes = {f.name: (max(70, 8.2 * len(f.name) + 26), T_HEIGHT) for f in tfacts}
     t_pos = _place_transforms(tfacts, res_pos, width / 2, height / 2, t_sizes)
 
-    svg_a, tips_a = _svg("transforms", scenario, tfacts, rfacts, res_pos, t_pos,
-                         t_sizes, runtime, width, height, uid)
-    svg_b, tips_b = _svg("flow", scenario, tfacts, rfacts, res_pos, t_pos,
-                         t_sizes, runtime, width, height, uid)
+    svg_a, tips_a, groups_a = _svg("transforms", scenario, tfacts, rfacts, res_pos,
+                                   t_pos, t_sizes, runtime, width, height, uid)
+    svg_b, tips_b, groups_b = _svg("flow", scenario, tfacts, rfacts, res_pos,
+                                   t_pos, t_sizes, runtime, width, height, uid)
     tips = {**tips_a, **tips_b}
+    groups = {**groups_a, **groups_b}
 
     n = len(scenario.resources)
     light = " ".join(f"--gt-c{i}:{PALETTE_LIGHT[i % 8]};" for i in range(n))
@@ -534,7 +566,9 @@ def render_html(scenario, runtime=None, width=980, height=620, title=None) -> st
     css = (_CSS.replace("COLORS_DARK", _DARK + " " + dark)
                .replace("#UID {", "#UID { " + light, 1)
                .replace("UID", uid))
-    js = _JS.replace("UID", uid).replace("TIPS", json.dumps(tips))
+    js = (_JS.replace("UID", uid)
+             .replace("TIPS", json.dumps(tips))
+             .replace("GROUPS", json.dumps(groups)))
 
     return (
         f"<style>{css}</style>"
@@ -547,7 +581,8 @@ def render_html(scenario, runtime=None, width=980, height=620, title=None) -> st
         f"<button data-view='flow'>Resource flow</button></div></div>"
         f"<div class='gt-legend'>{legend}</div>"
         f"<div class='gt-stage'>{svg_a}{svg_b}<div class='gt-tip'></div></div>"
-        f"<div class='gt-foot'>Hover any edge or node for the transforms responsible. "
+        f"<div class='gt-foot'>Hover any edge for the transforms responsible, or a "
+        f"transform to light up its whole recipe. "
         f"Under universal decay every arrow into a resource is the only reason it "
         f"exists next turn.</div></div>"
         f"<script>{js}</script>"
