@@ -1,7 +1,7 @@
 """Hand-worked mechanical cases for the universal-decay engine."""
 import numpy as np
 
-from sim import initial_world, run_turn, scenario_from_dict, SetTransformPriority
+from sim import initial_world, run_turn, scenario_from_dict, SpendNudges
 
 
 def _stock(world, scenario, location, resource):
@@ -82,9 +82,10 @@ def test_transform_order_changes_outcome():
         "evaluation_order": ["green"],
     }
     scenario = scenario_from_dict(data)
+    # growth is authored first (index 0); a +1 nudge lifts atmosphere (index 1) above it.
     growth_first, _ = run_turn(initial_world(scenario), scenario)
     atmo_first, _ = run_turn(initial_world(scenario), scenario,
-                             orders=[SetTransformPriority("green", ["atmosphere"])])
+                             orders=[SpendNudges("green", {"atmosphere": +1})])
     assert _stock(growth_first, scenario, "green", "air") == 0
     assert _stock(atmo_first, scenario, "green", "air") == 3
     assert not np.array_equal(growth_first.stock, atmo_first.stock)
@@ -100,10 +101,44 @@ def test_priority_persists_across_turns():
         "locations": [{"id": "green", "resources": {"plant": 40, "energy": 40}, "destinations": []}],
         "evaluation_order": ["green"],
     })
+    green = scenario.location_index["green"]
     world = initial_world(scenario)
-    world, _ = run_turn(world, scenario, orders=[SetTransformPriority("green", ["atmosphere"])])
-    order = [scenario.transform_names[t] for t in world.transform_order[scenario.location_index["green"]]]
-    assert order[0] == "atmosphere"
+    # Nudge once; the score edit persists, so later plain turns keep the new order
+    # without the delta being re-applied.
+    world, _ = run_turn(world, scenario, orders=[SpendNudges("green", {"atmosphere": +1})])
+    assert scenario.transform_names[world.order(green)[0]] == "atmosphere"
+    world, _ = run_turn(world, scenario)   # no order this turn
+    assert scenario.transform_names[world.order(green)[0]] == "atmosphere"
+
+
+def test_priority_deltas_superpose():
+    # Two nudges onto the same score commute: applying +2 then -1 gives the same
+    # persistent state as -1 then +2, and both net +1 (atmosphere ahead of growth).
+    def make():
+        return scenario_from_dict({
+            "resources": ["plant", "energy", "air"],
+            "transforms": [
+                {"name": "growth", "inputs": {"plant": 1, "energy": 1}, "outputs": {"plant": 2}},
+                {"name": "atmosphere", "inputs": {"plant": 1, "energy": 1}, "outputs": {"plant": 1, "air": 1}},
+            ],
+            "locations": [{"id": "green", "resources": {"plant": 40, "energy": 40}, "destinations": []}],
+            "evaluation_order": ["green"],
+        })
+
+    scenario = make()
+    green = scenario.location_index["green"]
+
+    a = initial_world(scenario)
+    a, _ = run_turn(a, scenario, orders=[SpendNudges("green", {"atmosphere": +2}),
+                                         SpendNudges("green", {"atmosphere": -1})])
+    b = initial_world(scenario)
+    b, _ = run_turn(b, scenario, orders=[SpendNudges("green", {"atmosphere": -1}),
+                                         SpendNudges("green", {"atmosphere": +2})])
+
+    assert np.array_equal(a.priority, b.priority)         # arrival order irrelevant
+    assert a.order(green) == b.order(green)
+    assert int(a.priority[green, scenario.transform_names.index("atmosphere")]) == 1  # net +1
+    assert scenario.transform_names[a.order(green)[0]] == "atmosphere"
 
 
 def test_upstream_pool_and_downstream_migration():

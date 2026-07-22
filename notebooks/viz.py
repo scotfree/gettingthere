@@ -47,10 +47,18 @@ def draw_world(world, scenario, ax=None, title=None):
     return ax
 
 
+def _priority_label(world, scenario, i, t) -> str:
+    """Transform name, annotated with its accumulated nudge delta if non-zero."""
+    name = scenario.transform_names[t]
+    delta = int(world.priority[i, t])
+    return f"{name}({delta:+d})" if delta else name
+
+
 def summarize(world, scenario) -> str:
     lines = [f"tick {world.tick}"]
     for i, lid in enumerate(scenario.location_ids):
-        order = " > ".join(scenario.transform_names[t] for t in world.transform_order[i])
+        # order is derived from the persistent priority scores, highest first
+        order = " > ".join(_priority_label(world, scenario, i, t) for t in world.order(i))
         lines.append(f"  {lid}: {_resource_summary(world.stock[i], scenario.resources)}")
         lines.append(f"      priority: {order}")
     lines.append("  TOTALS: " + _resource_summary(world.stock.sum(axis=0), scenario.resources))

@@ -13,7 +13,9 @@ Turn semantics (implementation guide §3.3):
     chaining: each token drives at most one transform per turn, and autocatalytic
     recipes cannot feed themselves (termination is trivial).
   - Locations are processed in evaluation_order; within a location, transforms in
-    priority order. A location's pool = its own current stock + every upstream
+    priority order — derived each turn from the persistent per-location score
+    (`world.order(loc)`), so nudges that shifted the scores in earlier turns keep
+    their effect. A location's pool = its own current stock + every upstream
     location's current stock. Consumption draws local stock first, then upstream
     in locations-list order; outputs land locally. Consuming upstream + producing
     locally is how resources migrate down the DAG.
@@ -104,7 +106,7 @@ def run_turn(world: WorldState, scenario: Scenario, orders=(), seed: int | None 
     next_stock = np.zeros_like(world.stock)   # built from outputs only -> everything else decays
     events: list = []
     for loc in scenario.evaluation_order:
-        events.extend(process_location(current, next_stock, new.transform_order[loc], scenario, loc))
+        events.extend(process_location(current, next_stock, new.order(loc), scenario, loc))
 
     new.stock = next_stock
     new.tick += 1

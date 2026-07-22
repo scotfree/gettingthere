@@ -1,8 +1,22 @@
 """Order vocabulary.
 
-MVP has exactly one order: reprioritize the transforms at a location. Orders are
-applied to the world at the start of a turn and *persist* — a priority change
-stays in effect until changed again (it is policy, not a one-shot command).
+MVP has exactly one order: nudge the transform priority at a location. An order
+carries signed *priority deltas* — `{transform_name: delta}` — which are added to
+the location's persistent priority scores.
+
+Deltas superpose and persist:
+  - **Superpose:** several sources nudging the same transform simply sum (a
+    player's +3 and a rival movement's -2 net +1). Adding to a sort key is
+    commutative, so there is no arbitration, no majority check, and no tiebreak
+    rule — application order never changes the result.
+  - **Persist:** the delta edits the score *once*, at submission. The score is
+    the world's persistent state, so the transform keeps its new position until
+    some other nudge moves it. Nothing re-applies the delta each turn.
+
+The order is named `SpendNudges` because in the full design (IMPLEMENTATION §3.1,
+GDD §6) each delta is paid for with a `nudge` resource held at the location. That
+resource — and the "do you hold k nudges here?" check — is a designed-but-not-yet-
+implemented extension; v0 applies the deltas directly.
 """
 from __future__ import annotations
 
@@ -13,35 +27,28 @@ from .world import WorldState
 
 
 @dataclass
-class SetTransformPriority:
-    """Raise the named transforms to the front of a location's priority list.
+class SpendNudges:
+    """Apply signed priority deltas to the transforms at a location.
 
-    `order` is a partial list of transform names: they take the top priority
-    slots in the given order, and any transforms not named keep their default
-    (config) order behind them. Pass all names for a full permutation.
+    `deltas` maps transform name -> signed integer. A positive delta moves the
+    transform toward the front of the location's stack (higher priority); a
+    negative delta moves it back. Deltas accumulate onto the persistent score.
     """
     location_id: str
-    order: list  # list[str]
+    deltas: dict  # dict[str, int]
 
 
 def apply_orders(world: WorldState, scenario: Scenario, orders) -> None:
-    """Mutate `world` in place, persisting each priority change."""
+    """Mutate `world` in place, accumulating each priority delta onto the score."""
     for order in orders:
-        if isinstance(order, SetTransformPriority):
+        if isinstance(order, SpendNudges):
             loc = scenario.location_index.get(order.location_id)
             if loc is None:
                 raise ValueError(f"unknown location '{order.location_id}'")
-            front: list[int] = []
-            seen: set[int] = set()
-            for name in order.order:
+            for name, delta in order.deltas.items():
                 if name not in scenario.transform_names:
                     raise ValueError(f"unknown transform '{name}'")
                 t = scenario.transform_names.index(name)
-                if t in seen:
-                    raise ValueError(f"transform '{name}' listed twice")
-                seen.add(t)
-                front.append(t)
-            rest = [t for t in scenario.default_transform_order if t not in seen]
-            world.transform_order[loc] = front + rest
+                world.priority[loc, t] += int(delta)
         else:
             raise TypeError(f"unknown order type: {type(order).__name__}")
