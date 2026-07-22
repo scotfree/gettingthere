@@ -1,0 +1,393 @@
+{
+  "name": "ring-valley",
+  "description": "Three settlements strung along a corridor. Every road is a symmetric pair of edges carrying opposite tags, so nothing moves unless a transport transform pulls it along a direction. Buildings are catalysts, which is what caps each job's throughput. The town mints nudges from a control terminal; the forest preaches a back-to-the-land movement that ships downstream and nudges the town's stack with no player involved.",
+  "resources": [
+    "person",
+    "food",
+    "plant",
+    "energy",
+    "air",
+    "wood",
+    "scrubber",
+    "nursery",
+    "chapel",
+    "sawmill",
+    "field",
+    "control_terminal",
+    "nudge",
+    "back_to_the_land"
+  ],
+  "transforms": [
+    {
+      "name": "staff_control_terminal",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "control_terminal": 1,
+        "person": 1,
+        "energy": 1
+      },
+      "outputs": {
+        "control_terminal": 1,
+        "person": 1,
+        "nudge": 1
+      }
+    },
+    {
+      "name": "preach",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "chapel": 1,
+        "person": 1,
+        "plant": 1
+      },
+      "outputs": {
+        "chapel": 1,
+        "person": 1,
+        "back_to_the_land": 1
+      }
+    },
+    {
+      "name": "ship_movement_cityward",
+      "input_sets": [
+        "cityward"
+      ],
+      "inputs": {
+        "back_to_the_land": 1
+      },
+      "outputs": {
+        "back_to_the_land": 1
+      }
+    },
+    {
+      "name": "agitate",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "back_to_the_land": 1,
+        "person": 2
+      },
+      "outputs": {
+        "person": 2
+      },
+      "actions": [
+        {
+          "type": "priority_nudge",
+          "transform": "farming",
+          "delta": 1
+        },
+        {
+          "type": "priority_nudge",
+          "transform": "logging",
+          "delta": -1
+        }
+      ]
+    },
+    {
+      "name": "haul_cityward",
+      "input_sets": [
+        "cityward"
+      ],
+      "inputs": {
+        "wood": 1
+      },
+      "outputs": {
+        "wood": 1
+      }
+    },
+    {
+      "name": "haul_food_forestward",
+      "input_sets": [
+        "forestward"
+      ],
+      "inputs": {
+        "food": 1
+      },
+      "outputs": {
+        "food": 1
+      }
+    },
+    {
+      "name": "logging",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "sawmill": 1,
+        "person": 1,
+        "plant": 1
+      },
+      "outputs": {
+        "sawmill": 1,
+        "person": 1,
+        "wood": 1
+      }
+    },
+    {
+      "name": "farming",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "field": 1,
+        "person": 1,
+        "plant": 1,
+        "energy": 1
+      },
+      "outputs": {
+        "field": 1,
+        "person": 1,
+        "food": 2
+      }
+    },
+    {
+      "name": "growth",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "nursery": 1,
+        "plant": 1,
+        "energy": 1
+      },
+      "outputs": {
+        "nursery": 1,
+        "plant": 2
+      }
+    },
+    {
+      "name": "survival",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "person": 1,
+        "food": 1,
+        "air": 1
+      },
+      "outputs": {
+        "person": 1
+      }
+    },
+    {
+      "name": "atmosphere",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "scrubber": 1,
+        "plant": 1,
+        "energy": 1
+      },
+      "outputs": {
+        "scrubber": 1,
+        "plant": 1,
+        "air": 1
+      }
+    },
+    {
+      "name": "food_storage",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "food": 1,
+        "energy": 1
+      },
+      "outputs": {
+        "food": 1
+      }
+    },
+    {
+      "name": "wood_storage",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "wood": 1
+      },
+      "outputs": {
+        "wood": 1
+      }
+    },
+    {
+      "name": "photosynthesis",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "plant": 1
+      },
+      "outputs": {
+        "plant": 1,
+        "energy": 1
+      }
+    },
+    {
+      "name": "air_storage",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "air": 1
+      },
+      "outputs": {
+        "air": 1
+      }
+    },
+    {
+      "name": "chapel_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "chapel": 1
+      },
+      "outputs": {
+        "chapel": 1
+      }
+    },
+    {
+      "name": "sawmill_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "sawmill": 1
+      },
+      "outputs": {
+        "sawmill": 1
+      }
+    },
+    {
+      "name": "field_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "field": 1
+      },
+      "outputs": {
+        "field": 1
+      }
+    },
+    {
+      "name": "terminal_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "control_terminal": 1
+      },
+      "outputs": {
+        "control_terminal": 1
+      }
+    },
+    {
+      "name": "scrubber_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "scrubber": 1
+      },
+      "outputs": {
+        "scrubber": 1
+      }
+    },
+    {
+      "name": "nursery_upkeep",
+      "input_sets": [
+        "local"
+      ],
+      "inputs": {
+        "nursery": 1
+      },
+      "outputs": {
+        "nursery": 1
+      }
+    }
+  ],
+  "locations": [
+    {
+      "id": "forest",
+      "resources": {
+        "person": 4,
+        "plant": 40,
+        "energy": 8,
+        "food": 8,
+        "air": 10,
+        "chapel": 1,
+        "sawmill": 2,
+        "scrubber": 4,
+        "nursery": 5
+      }
+    },
+    {
+      "id": "farmstead",
+      "resources": {
+        "person": 4,
+        "plant": 24,
+        "energy": 8,
+        "food": 8,
+        "air": 10,
+        "field": 3,
+        "scrubber": 4,
+        "nursery": 5
+      }
+    },
+    {
+      "id": "town",
+      "resources": {
+        "person": 5,
+        "plant": 24,
+        "energy": 8,
+        "food": 10,
+        "air": 12,
+        "field": 2,
+        "control_terminal": 1,
+        "scrubber": 5,
+        "nursery": 4
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "forest",
+      "to": "farmstead",
+      "tags": [
+        "cityward"
+      ]
+    },
+    {
+      "from": "farmstead",
+      "to": "forest",
+      "tags": [
+        "forestward"
+      ]
+    },
+    {
+      "from": "farmstead",
+      "to": "town",
+      "tags": [
+        "cityward"
+      ]
+    },
+    {
+      "from": "town",
+      "to": "farmstead",
+      "tags": [
+        "forestward"
+      ]
+    }
+  ],
+  "evaluation_order": [
+    "town",
+    "farmstead",
+    "forest"
+  ]
+}

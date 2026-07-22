@@ -48,20 +48,21 @@ class Replay:
     stock_after: np.ndarray
 
 
-def _pool(current: np.ndarray, loc: int, upstream: list[int]) -> np.ndarray:
-    pool = current[loc].copy()
-    for u in upstream:
-        pool += current[u]
+def _pool(current: np.ndarray, rows: list[int]) -> np.ndarray:
+    """Sum of the stock rows a transform may draw from (its input sets, precompiled)."""
+    pool = np.zeros(current.shape[1], dtype=current.dtype)
+    for row in rows:
+        pool += current[row]
     return pool
 
 
-def _consume(current: np.ndarray, loc: int, upstream: list[int], amount: np.ndarray) -> None:
-    """Remove `amount` per resource from the pool: local row first, then upstream in order.
+def _consume(current: np.ndarray, rows: list[int], amount: np.ndarray) -> None:
+    """Remove `amount` per resource from the pool, draining `rows` in order.
 
-    The caller guarantees the pool holds at least `amount` (n was computed
-    against it), so every resource is fully satisfied.
+    `rows` is local-first then upstream in locations-list order, so local stock
+    goes before a neighbour's. The caller guarantees the pool holds at least
+    `amount` (n was computed against it), so every resource is fully satisfied.
     """
-    rows = [loc, *upstream]
     for r in range(amount.shape[0]):
         remaining = int(amount[r])
         if remaining == 0:
@@ -75,22 +76,30 @@ def _consume(current: np.ndarray, loc: int, upstream: list[int], amount: np.ndar
 
 
 def process_location(current: np.ndarray, next_stock: np.ndarray, order: list,
-                     scenario: Scenario, loc: int) -> list:
-    """Fire every transform once, in priority order. Consume from `current`, produce into `next_stock`."""
+                     scenario: Scenario, loc: int, pending: list | None = None) -> list:
+    """Fire every transform once, in priority order. Consume from `current`, produce into `next_stock`.
+
+    `pending`, if given, collects `(location, target transform, delta)` triples for
+    priority nudges emitted by the transforms that fired. They are *not* applied
+    here: nothing may mutate the order this pass is reading (IMPLEMENTATION §3.3).
+    """
     events: list = []
-    upstream = scenario.upstream[loc]
     for t in order:
         need_t = scenario.need[t]
         emit_t = scenario.emit[t]
         mask = need_t > 0
         if not mask.any():
             continue  # no "something from nothing"
-        pool = _pool(current, loc, upstream)
+        rows = scenario.consume_rows[t][loc]
+        pool = _pool(current, rows)
         n = int(np.min(pool[mask] // need_t[mask]))
         if n <= 0:
             continue
-        _consume(current, loc, upstream, n * need_t)
+        _consume(current, rows, n * need_t)
         next_stock[loc] += n * emit_t
+        if pending is not None:
+            for target, delta in scenario.actions[t]:
+                pending.append((loc, target, delta * n))
         events.append(FireEvent(scenario.location_ids[loc], scenario.transform_names[t], n))
     return events
 
@@ -102,11 +111,18 @@ def run_turn(world: WorldState, scenario: Scenario, orders=(), seed: int | None 
         new.seed = seed
     apply_orders(new, scenario, orders)
 
-    current = world.stock.copy()              # depletes as inputs are consumed
+    # orders already applied, so `new.stock` reflects any nudges paid for this turn
+    current = new.stock.copy()                # depletes as inputs are consumed
     next_stock = np.zeros_like(world.stock)   # built from outputs only -> everything else decays
     events: list = []
+    pending: list = []                        # priority nudges emitted by transforms this turn
     for loc in scenario.evaluation_order:
-        events.extend(process_location(current, next_stock, new.order(loc), scenario, loc))
+        events.extend(process_location(current, next_stock, new.order(loc), scenario, loc, pending))
+
+    # Applied only once the pass is over, so no location's stack changed under its
+    # own evaluation. Deltas are additive, so the order of `pending` is irrelevant.
+    for loc, target, delta in pending:
+        new.priority[loc, target] += delta
 
     new.stock = next_stock
     new.tick += 1

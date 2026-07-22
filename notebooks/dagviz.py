@@ -308,6 +308,25 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
                              f"{_esc(verb.rstrip('s'))}d over {runtime.ticks} ticks "
                              f"({n} firings)</div>")
             edge_specs.append((path, lab, qty, ridx[res], vol, tip, tname, vmax))
+
+        # priority nudges: transform -> the transform it reorders. Not a resource
+        # flow at all, so they get their own neutral colour and a dashed stroke.
+        for f in tfacts:
+            for target, delta in f.actions:
+                path, lab = _curve(t_pos[f.name], t_pos[target],
+                                   t_sizes[f.name], t_sizes[target])
+                n = _fires(runtime, f.name)
+                tip = (f"<div class='gt-tip-h'>{_esc(f.name)} nudges "
+                       f"{_esc(target)} {delta:+d}</div>"
+                       f"<div class='gt-tip-kind'>priority action, not a resource "
+                       f"flow</div>"
+                       f"<div class='gt-tip-row'><span>per firing</span>"
+                       f"<b>{delta:+d} priority</b></div>")
+                if n is not None:
+                    tip += (f"<div class='gt-tip-obs'><b>{delta * n:+d}</b> total over "
+                            f"{runtime.ticks} ticks ({n} firings)</div>" if n
+                            else "<div class='gt-tip-obs gt-dead'>never fired</div>")
+                edge_specs.append((path, lab, None, "act", (n or 0), tip, f.name, vmax))
     else:
         G = resource_graph(scenario, tfacts)
         vols = []
@@ -345,7 +364,9 @@ def _svg(view, scenario, tfacts, rfacts, res_pos, t_pos, t_sizes, runtime,
             edges_of_transform.setdefault(tname, []).append(eid)
         dead = runtime is not None and vol == 0
         w = _width_for(vol, vmax) if runtime is not None else STATIC_WIDTH
-        cls = "gt-edge" + (" gt-edge-dead" if dead else "")
+        cls = ("gt-edge"
+               + (" gt-edge-action" if cidx == "act" else "")
+               + (" gt-edge-dead" if dead else ""))
         edges.append(
             f"<g class='{cls}' data-id='{eid}' data-c='{cidx}'>"
             f"<path class='gt-hit' d='{path}'/>"
@@ -434,7 +455,9 @@ _CSS = """
 #UID .gt-svg { display:block; width:100%; height:auto; overflow:visible; }
 #UID .gt-svg.hidden { display:none; }
 
+#UID { --gt-cact:#898781; }
 #UID .gt-edge { opacity:0.85; }
+#UID .gt-edge-action .gt-line { stroke-dasharray:7 4; }
 #UID .gt-line { fill:none; stroke-linecap:round; }
 #UID .gt-hit { fill:none; stroke:transparent; stroke-width:20; cursor:pointer; }
 #UID .gt-edge-dead { opacity:0.32; }
@@ -561,6 +584,9 @@ def render_html(scenario, runtime=None, width=980, height=620, title=None) -> st
         f"<span><i class='gt-sw' style='background:var(--gt-c{i})'></i>{_esc(r)}</span>"
         for i, r in enumerate(scenario.resources)
     )
+    if any(f.actions for f in tfacts):
+        legend += ("<span><i class='gt-sw' style='background:var(--gt-cact)'></i>"
+                   "priority nudge (dashed)</span>")
     note = ("edge width = volume observed in the replay; dashed = never fired"
             if runtime is not None else "static config — no replay data")
     css = (_CSS.replace("COLORS_DARK", _DARK + " " + dark)

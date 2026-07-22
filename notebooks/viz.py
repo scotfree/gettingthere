@@ -15,22 +15,32 @@ def _resource_summary(stock_row, resources) -> str:
 
 
 def build_graph(scenario) -> nx.DiGraph:
+    """Location graph, layered upstream->downstream where that is well defined.
+
+    Once roads are symmetric edge pairs (each half carrying the opposite
+    directional tag) the raw graph is cyclic and has no topological layering —
+    that is the whole reason tags exist. Such graphs get no `layer` attribute and
+    `draw_world` falls back to a circular layout.
+    """
     G = nx.DiGraph()
     for lid in scenario.location_ids:
         G.add_node(lid)
     for i, dsts in enumerate(scenario.destinations):
         for d in dsts:
             G.add_edge(scenario.location_ids[i], scenario.location_ids[d])
-    # layer = topological generation, for a clean upstream->downstream layout
-    for layer, generation in enumerate(nx.topological_generations(G)):
-        for node in generation:
-            G.nodes[node]["layer"] = layer
+    if nx.is_directed_acyclic_graph(G):
+        for layer, generation in enumerate(nx.topological_generations(G)):
+            for node in generation:
+                G.nodes[node]["layer"] = layer
     return G
 
 
 def draw_world(world, scenario, ax=None, title=None):
     G = build_graph(scenario)
-    pos = nx.multipartite_layout(G, subset_key="layer")
+    if all("layer" in d for _, d in G.nodes(data=True)):
+        pos = nx.multipartite_layout(G, subset_key="layer")
+    else:
+        pos = nx.circular_layout(G)   # cyclic: no upstream/downstream to lay out by
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 5))
     labels = {

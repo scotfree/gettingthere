@@ -35,6 +35,13 @@ class TransformFacts:
     amplifies: dict[str, float]      # resource -> out/in ratio, where out > in > 0
     kind: str
     recipe: str
+    input_sets: tuple[str, ...]      # the pools it draws from: local / nearby / <TAG>
+    actions: tuple                   # (target transform name, delta) emitted per firing
+
+    @property
+    def transports(self) -> bool:
+        """Pulls from a directional tag rather than its own location: a hauler."""
+        return any(s not in ("local", "nearby") for s in self.input_sets)
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,9 @@ def transform_facts(scenario) -> list[TransformFacts]:
             catalysts=catalysts, consumed=consumed, produced=produced,
             amplifies=amplifies, kind=kind,
             recipe=f"{_fmt_side(inputs)} {ARROW} {_fmt_side(outputs)}",
+            input_sets=tuple(scenario.input_sets[t]),
+            actions=tuple((scenario.transform_names[target], delta)
+                          for target, delta in scenario.actions[t]),
         ))
     return out
 
@@ -321,14 +331,16 @@ def rules_summary(scenario, description: str = "") -> str:
 
     md.append("### Transforms\n")
     md.append(_table(
-        ["transform", "recipe", "kind", "net effect", "notes"],
+        ["transform", "recipe", "draws from", "kind", "net effect", "notes"],
         [[
             f"`{f.name}`",
             f.recipe,
+            ", ".join(f"`{s}`" for s in f.input_sets),
             f.kind,
             ", ".join(f"{v:+d} {r}" for r, v in f.net.items()) or "none (pure hold)",
             ", ".join(
                 [f"amplifies {r} ×{_fmt_num(g)}" for r, g in f.amplifies.items()]
+                + [f"nudges {t} {d:+d}" for t, d in f.actions]
                 + ([f"needs {', '.join(f.catalysts)} present"] if f.catalysts else [])
             ) or "—",
         ] for f in tf],
@@ -386,6 +398,49 @@ def rules_summary(scenario, description: str = "") -> str:
             hops.append(f"{a} {ARROW}[{'/'.join(G[a][b]['transforms'])}]{ARROW} {b}")
         sys_lines.append("- **Loop:** " + " · ".join(hops))
     md.append("\n".join(sys_lines) + "\n" if sys_lines else "_(no loops or sources)_\n")
+
+    tags = sorted(t for t in scenario.upstream_by_tag if t != "nearby")
+    haulers = [f for f in tf if f.transports]
+    if tags or haulers:
+        md.append("### Logistics — tagged edges\n")
+        md.append(
+            "A road is a symmetric pair of edges, so topology alone carries no "
+            "direction. Each tag filters the graph down to an acyclic direction "
+            "field; a transform naming that tag pulls one hop along it per turn, "
+            "and the reverse tag on the same roads carries counter-flow.\n"
+        )
+        rows = []
+        for tag in tags:
+            hops = [
+                f"{scenario.location_ids[u]} {ARROW} {scenario.location_ids[l]}"
+                for l in range(scenario.L)
+                for u in scenario.upstream_by_tag[tag][l]
+            ]
+            movers = [f"`{f.name}` ({', '.join(f.outputs) or 'nothing'})"
+                      for f in tf if tag in f.input_sets]
+            rows.append([f"`{tag}`", " · ".join(hops) or "—",
+                         ", ".join(movers) or "_nothing pulls on this tag_"])
+        md.append(_table(["tag", "edges", "transforms pulling along it"], rows))
+
+    nudgers = [f for f in tf if "nudge" in f.outputs]
+    actors = [f for f in tf if f.actions]
+    if nudgers or actors:
+        md.append("### Politics — where priority changes come from\n")
+        lines = []
+        for f in nudgers:
+            lines.append(
+                f"- **Player capacity:** `{f.name}` mints {f.outputs['nudge']} nudge per "
+                f"firing, capped by {', '.join(f.catalysts) or 'nothing'}. Nudges are spent "
+                "where they sit, one per point of priority moved, and decay unspent."
+            )
+        for f in actors:
+            effects = ", ".join(f"`{t}` {d:+d}" for t, d in f.actions)
+            lines.append(
+                f"- **Autonomous:** `{f.name}` emits {effects} per firing, with no player "
+                "involved. Deltas superpose with everything else and land after the pass "
+                "that produced them."
+            )
+        md.append("\n".join(lines) + "\n")
 
     md.append("### Locations\n")
     md.append(_table(

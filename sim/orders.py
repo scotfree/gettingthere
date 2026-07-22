@@ -13,10 +13,14 @@ Deltas superpose and persist:
     the world's persistent state, so the transform keeps its new position until
     some other nudge moves it. Nothing re-applies the delta each turn.
 
-The order is named `SpendNudges` because in the full design (IMPLEMENTATION §3.1,
-GDD §6) each delta is paid for with a `nudge` resource held at the location. That
-resource — and the "do you hold k nudges here?" check — is a designed-but-not-yet-
-implemented extension; v0 applies the deltas directly.
+Each delta is *paid for* with a `nudge` resource held at the location, one nudge
+per point of movement (so `{"farming": +2}` costs two). Nudges are minted by
+control terminals, are spent where they sit, and — being ordinary resources under
+universal decay — evaporate if unspent. That is the whole political economy: your
+turn is as large as the capacity you built.
+
+A scenario that never declares a `nudge` resource simply cannot be nudged, and
+saying otherwise is an authoring error rather than a free action.
 """
 from __future__ import annotations
 
@@ -26,29 +30,57 @@ from .scenario import Scenario
 from .world import WorldState
 
 
+NUDGE = "nudge"
+
+
 @dataclass
 class SpendNudges:
-    """Apply signed priority deltas to the transforms at a location.
+    """Spend nudges held at a location on signed priority deltas.
 
     `deltas` maps transform name -> signed integer. A positive delta moves the
     transform toward the front of the location's stack (higher priority); a
     negative delta moves it back. Deltas accumulate onto the persistent score.
+    Cost is the total distance moved: `sum(abs(delta))` nudges.
     """
     location_id: str
     deltas: dict  # dict[str, int]
 
+    def cost(self) -> int:
+        return sum(abs(int(d)) for d in self.deltas.values())
+
 
 def apply_orders(world: WorldState, scenario: Scenario, orders) -> None:
-    """Mutate `world` in place, accumulating each priority delta onto the score."""
+    """Mutate `world` in place: pay for each order in nudges, then accumulate its deltas.
+
+    Validation is all-or-nothing per order — an order that cannot be paid for
+    raises rather than applying partially, so a rejected turn leaves no trace.
+    """
     for order in orders:
-        if isinstance(order, SpendNudges):
-            loc = scenario.location_index.get(order.location_id)
-            if loc is None:
-                raise ValueError(f"unknown location '{order.location_id}'")
-            for name, delta in order.deltas.items():
-                if name not in scenario.transform_names:
-                    raise ValueError(f"unknown transform '{name}'")
-                t = scenario.transform_names.index(name)
-                world.priority[loc, t] += int(delta)
-        else:
+        if not isinstance(order, SpendNudges):
             raise TypeError(f"unknown order type: {type(order).__name__}")
+
+        loc = scenario.location_index.get(order.location_id)
+        if loc is None:
+            raise ValueError(f"unknown location '{order.location_id}'")
+        targets = []
+        for name, delta in order.deltas.items():
+            if name not in scenario.transform_names:
+                raise ValueError(f"unknown transform '{name}'")
+            targets.append((scenario.transform_names.index(name), int(delta)))
+
+        cost = order.cost()
+        if cost:
+            nudge_r = scenario.resource_index.get(NUDGE)
+            if nudge_r is None:
+                raise ValueError(
+                    f"scenario '{scenario.name}' declares no '{NUDGE}' resource, so its "
+                    "transform priorities cannot be nudged")
+            held = int(world.stock[loc, nudge_r])
+            if held < cost:
+                raise ValueError(
+                    f"location '{order.location_id}' holds {held} {NUDGE}(s) but the order "
+                    f"costs {cost}")
+            world.stock[loc, nudge_r] -= cost
+
+        for t, delta in targets:
+            world.priority[loc, t] += delta

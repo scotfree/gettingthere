@@ -133,7 +133,7 @@ One JSON file per scenario, four sections. Authoring uses human-friendly count-d
 ```
 
 - **`resources`** — the global vocabulary. Its order defines the resource enumeration used everywhere else at runtime.
-- **`transforms`** — ordered list; **authored position is the default priority score**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last); ties broken by authored order. Priority is a *score* rather than a slot so that nudges (below) can superpose commutatively. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
+- **`transforms`** — ordered list; **authored position is the default priority**. Convention: sorted descending by total input count (most specific/demanding first, generic mop-ups like photosynthesis last). Priority is a *score* rather than a slot so that nudges (below) superpose commutatively: the stored score is a signed **delta defaulting to 0**, and evaluation order is `sorted(-score, authored index)` — so a **positive delta moves a transform toward the front**, and an all-zero row reproduces the authored order exactly. Catalysts appear in both `inputs` and `outputs`; consumption is absence from `outputs`. No other transform semantics exist.
 - **`locations`** — graph nodes. `destinations` are location ids (edges point downstream). Initial stocks live here. **v0 assumes the graph is acyclic**, which is what makes a single evaluation pass well-defined; the general design allows symmetric edge pairs and recovers direction from tags instead (see the extensions below).
 - **`evaluation_order`** — explicit total order over location ids for turn processing. Explicit rather than derived so scenario authors control contention priority.
 
@@ -141,7 +141,7 @@ The reference example is `scenarios_data/simple-world.json`.
 
 #### Extensions: tagged edges and action outputs
 
-*Designed (GDD §6), not yet implemented. The v0 loader supports only the four sections above; the pool rule it implements is exactly the `nearby` tag below.*
+*Implemented. A scenario using none of these behaves exactly as before, because the default input set is `local` + `nearby` and `nearby` is every edge regardless of tag. `scenarios_data/ring-valley.json` exercises all of it; `simple-world.json` uses none of it.*
 
 ```json
 {
@@ -308,11 +308,11 @@ Keep `sim/` ruthlessly pure: no network, no clock, no framework imports, no ambi
 Design-side questions live in GDD §9. These are the ones that change what gets built, and they should be answered before the milestone that depends on them.
 
 - **The Order vocabulary itself** (blocks M2). §3.1 now fixes the *shape* — spend nudges on signed deltas — but not the contents at larger scope. Whether a ship-scale turn is "many nudges at many locations" or "nudges at aggregate locations" is the open half, and it is the same question as GDD §9's verb-changes-with-scope tension.
-- **Priority as a score, confirmed against a real scenario** (blocks M2). §3.3 argues deltas onto a sort key rather than slot moves, which is what makes superposition commutative. Untested. The case to write first: two sources nudging the same location in the same turn, asserted to give an identical stack under both arrival orders.
+- ~~**Priority as a score, confirmed against a real scenario**~~ — *done.* `test_priority_deltas_superpose` asserts an identical stack under both arrival orders, and `test_action_nudges_priority_only_from_next_turn` pins that a nudge emitted during a pass cannot reorder the pass that emitted it.
 - **Nudge economics** (blocks M4). What a control terminal costs, and how many nudges per turn it yields. This is the main balance dial for the whole political layer — cheap terminals make political capital trivial, dear ones ossify the map — and there is currently no number attached to it.
 - **Delta clamping** (blocks nothing yet). Deltas persist and saturate as a sort key, but entrenched positions gain hysteresis proportional to how long they were held. Bounding the score range is the hedge if that proves too stiff at the table.
 - **Nudge attribution in multiplayer** (blocks multiplayer, post-MVP) — *resolved in design.* Not arbitration (that is gone), but which player may collapse which blank nudge when two run terminals in one location. **The control terminal carries the owning player and the blank nudges inherit it.** Location ownership was considered and rejected: it cannot disambiguate two players' terminals in the same location. Implementation is deferred with the rest of multiplayer, but the decision is made; see §3.4.
-- **Per-`(location, transform)` pools** (blocks tagged edges). §3.2 notes that input sets move pool computation from per-location to per-transform. Worth measuring before committing — it multiplies the inner loop by the number of distinct input-set combinations in play.
+- ~~**Per-`(location, transform)` pools**~~ — *done.* Resolved by precomputing `consume_rows[t][l]` at load, so the tick loop still indexes rather than recomputing set unions. Cost is memory proportional to `T x L`, not inner-loop work.
 - **Save/persistence model and multiplayer turn-resolution timing.** Deferred, but the append-only turn log in §2 is the assumed substrate, and the pure-function turn model is what makes it re-derivable.
 - **A non-goals section.** Explicitly out for the MVP: ship construction, a physics solver, multiplayer netcode, exotic geometries. Written down so the build does not drift into them.
 
