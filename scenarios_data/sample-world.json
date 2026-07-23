@@ -1,0 +1,60 @@
+{
+  "name": "simple-world",
+  "description": "Minimal universal-decay ecology. Nothing persists unless a transform re-emits it: storage is a transform. Greenhouse feeds habitat.",
+  "resources": ["person", "food", "plant", "energy", "air"],
+  "transforms": [
+    {
+      "name": "farming",
+      "inputs":  { "person": 1, "plant": 1 },
+      "outputs": { "person": 1, "food": 2 }
+    },
+    {
+      "name": "survival",
+      "inputs":  { "person": 1, "food": 1, "air": 1 },
+      "outputs": { "person": 1 }
+    },
+    {
+      "name": "atmosphere",
+      "inputs":  { "plant": 1, "energy": 1 },
+      "outputs": { "plant": 1, "air": 1 }
+    },
+    {
+      "name": "growth",
+      "inputs":  { "plant": 1, "energy": 1 },
+      "outputs": { "plant": 2 }
+    },
+    {
+      "name": "food_storage",
+      "inputs":  { "food": 1, "energy": 1 },
+      "outputs": { "food": 1 }
+    },
+    {
+      "name": "plant_storage",
+      "inputs":  { "plant": 1, "energy": 1 },
+      "outputs": { "plant": 1 }
+    },
+    {
+      "name": "photosynthesis",
+      "inputs":  { "plant": 1 },
+      "outputs": { "plant": 1, "energy": 1 }
+    },
+    {
+      "name": "air_storage",
+      "inputs":  { "air": 1 },
+      "outputs": { "air": 1 }
+    }
+  ],
+  "locations": [
+    {
+      "id": "greenhouse",
+      "resources": { "plant": 8, "energy": 4 },
+      "destinations": ["habitat"]
+    },
+    {
+      "id": "habitat",
+      "resources": { "person": 2, "food": 4, "air": 4, "energy": 2 },
+      "destinations": []
+    }
+  ],
+  "evaluation_order": ["habitat", "greenhouse"]
+}

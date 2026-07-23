@@ -95,6 +95,7 @@ def process_location(current: np.ndarray, next_stock: np.ndarray, order: list,
         n = int(np.min(pool[mask] // need_t[mask]))
         if n <= 0:
             continue
+        print(f"T ({scenario.location_ids[loc]}): {scenario.transform_names[t]}: {','.join( [scenario.resources[k] for k in need_t] )} -> {','.join( [scenario.resources[k] for k in emit_t] )}")
         _consume(current, rows, n * need_t)
         next_stock[loc] += n * emit_t
         if pending is not None:
